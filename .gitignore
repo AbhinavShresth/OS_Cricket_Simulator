@@ -1,0 +1,26 @@
+# Build output
+build/
+
+# Compiled binaries
+*.o
+*.out
+*.exe
+*.a
+*.so
+
+# Logs generated at runtime
+logs/*.txt
+logs/*.log
+
+# Editor/IDE clutter
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# CMake leftovers (if you ever try it)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
