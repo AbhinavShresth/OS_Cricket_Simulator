@@ -9,7 +9,7 @@ int main() {
         Match match;
 
         // Start the match by loading both teams
-        if (!match.start("stats/india.txt", "stats/australia.txt")) {
+        if (!match.start("stats/india.txt", "stats/england.txt")) {
             std::cerr << "Failed to start match" << std::endl;
             return 1;
         }

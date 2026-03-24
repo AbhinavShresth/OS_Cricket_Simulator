@@ -1,8 +1,5 @@
 #include "loader.hpp"
 #include <fstream>
-#include <sstream>
-#include <algorithm>
-#include <cctype>
 #include <iostream>
 
 std::string TeamLoader::trim(const std::string& str) {
@@ -14,127 +11,80 @@ std::string TeamLoader::trim(const std::string& str) {
 
 std::string TeamLoader::getValue(const std::string& line) {
     size_t pos = line.find('=');
-    if (pos != std::string::npos) {
-        return trim(line.substr(pos + 1));
-    }
-    return "";
+    return (pos != std::string::npos) ? trim(line.substr(pos + 1)) : "";
 }
 
 Player* TeamLoader::parsePlayer(const std::vector<std::string>& lines) {
-    std::string name;
-    std::string role_str;
-    double strike_rate = 0.0;
-    double avg = 0.0;
-    int expected_balls = 0;
-    int thread_priority = 5;
+    std::string name, role_str;
+    double strike_rate = 0.0, avg = 0.0, economy = 0.0;
+    int expected_balls = 0, thread_priority = 5, max_overs = 0;
     bool is_death_specialist = false;
-    double economy = 0.0;
-    int max_overs = 0;
+    PlayerStats stats;
 
-    // Parse each line in the player block
     for (const auto& line : lines) {
-        std::string trimmed = trim(line);
-        if (trimmed.empty() || trimmed[0] == '#') continue;
+        std::string t = trim(line);
+        if (t.empty() || t[0] == '#' || t[0] == '[') continue;
 
-        if (trimmed.find("name=") != std::string::npos) {
-            name = getValue(trimmed);
-        } else if (trimmed.find("role=") != std::string::npos) {
-            role_str = getValue(trimmed);
-        } else if (trimmed.find("strike_rate=") != std::string::npos) {
-            strike_rate = std::stod(getValue(trimmed));
-        } else if (trimmed.find("avg=") != std::string::npos) {
-            avg = std::stod(getValue(trimmed));
-        } else if (trimmed.find("expected_balls=") != std::string::npos) {
-            expected_balls = std::stoi(getValue(trimmed));
-        } else if (trimmed.find("thread_priority=") != std::string::npos) {
-            thread_priority = std::stoi(getValue(trimmed));
-        } else if (trimmed.find("is_death_specialist=") != std::string::npos) {
-            std::string val = getValue(trimmed);
-            is_death_specialist = (val == "true" || val == "True" || val == "TRUE" || val == "1");
-        } else if (trimmed.find("economy=") != std::string::npos) {
-            economy = std::stod(getValue(trimmed));
-        } else if (trimmed.find("max_overs=") != std::string::npos) {
-            max_overs = std::stoi(getValue(trimmed));
+        if (t.find("name=") == 0) name = getValue(t);
+        else if (t.find("role=") == 0) role_str = getValue(t);
+        else if (t.find("strike_rate=") == 0) strike_rate = std::stod(getValue(t));
+        else if (t.find("avg=") == 0) avg = std::stod(getValue(t));
+        else if (t.find("expected_balls=") == 0) expected_balls = std::stoi(getValue(t));
+        else if (t.find("thread_priority=") == 0) thread_priority = std::stoi(getValue(t));
+        else if (t.find("is_death_specialist=") == 0) {
+            std::string val = getValue(t);
+            is_death_specialist = (val == "true" || val == "1");
         }
+        else if (t.find("economy=") == 0) economy = std::stod(getValue(t));
+        else if (t.find("max_overs=") == 0) max_overs = std::stoi(getValue(t));
+        
+        else if (t.find("fitness=") == 0) stats.fitness = std::stod(getValue(t));
+        else if (t.find("catching_efficiency=") == 0) stats.catching_efficiency = std::stod(getValue(t));
+        else if (t.find("clutch_factor=") == 0) stats.clutch_factor = std::stod(getValue(t));
+        else if (t.find("pressure_performance=") == 0) stats.pressure_performance = std::stod(getValue(t));
+        else if (t.find("batting=") == 0) stats.batting = std::stod(getValue(t));
+        else if (t.find("shot_selection=") == 0) stats.shot_selection = std::stod(getValue(t));
+        else if (t.find("power_hitting=") == 0) stats.power_hitting = std::stod(getValue(t));
+        else if (t.find("pace_skill=") == 0) stats.pace_skill = std::stod(getValue(t));
+        else if (t.find("swing_skill=") == 0) stats.swing_skill = std::stod(getValue(t));
+        else if (t.find("spin_skill=") == 0) stats.spin_skill = std::stod(getValue(t));
+        else if (t.find("spin_quantity=") == 0) stats.spin_quantity = std::stod(getValue(t));
+        else if (t.find("line_accuracy=") == 0) stats.line_accuracy = std::stod(getValue(t));
+        else if (t.find("length_control=") == 0) stats.length_control = std::stod(getValue(t));
     }
 
-    // Create appropriate player object based on role
-    if (role_str == "BATSMAN") {
-        return new Batsman(name, strike_rate, avg, expected_balls, thread_priority, is_death_specialist);
+    if (role_str == "BATSMAN" || role_str == "ALL_ROUNDER" || role_str == "WICKETKEEPER") {
+        return new Batsman(name, strike_rate, avg, expected_balls, thread_priority, is_death_specialist, stats);
     } else if (role_str == "BOWLER") {
-        return new Bowler(name, strike_rate, avg, expected_balls, economy, max_overs, thread_priority, is_death_specialist);
-    } else if (role_str == "ALL_ROUNDER") {
-        // For all-rounders, create as Batsman for now (can be extended later)
-        return new Batsman(name, strike_rate, avg, expected_balls, thread_priority, is_death_specialist);
-    } else if (role_str == "WICKETKEEPER") {
-        // Wicketkeepers are treated as batsmen
-        return new Batsman(name, strike_rate, avg, expected_balls, thread_priority, is_death_specialist);
+        return new Bowler(name, strike_rate, avg, expected_balls, economy, max_overs, thread_priority, is_death_specialist, stats);
     }
-
-    std::cerr << "Warning: Unknown player role: " << role_str << std::endl;
+    
+    std::cerr << "Unknown player role: " << role_str << "\n";
     return nullptr;
 }
-
 bool TeamLoader::load(const std::string& filepath, std::vector<Player*>& players) {
     std::ifstream file(filepath);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file: " << filepath << std::endl;
-        return false;
-    }
+    if (!file.is_open()) return false;
 
     std::string line;
-    std::vector<std::string> current_player_block;
-    bool in_player_block = false;
+    std::vector<std::string> block;
 
     while (std::getline(file, line)) {
-        std::string trimmed = trim(line);
+        std::string t = trim(line);
+        if (t.empty() || t[0] == '#' || t.find("TEAM ") == 0) continue;
 
-        // Skip empty lines and comments
-        if (trimmed.empty() || trimmed[0] == '#') {
-            continue;
-        }
-
-        // Check for TEAM line
-        if (trimmed.find("TEAM ") == 0) {
-            // Reset for new team (though we only load one team per file)
-            continue;
-        }
-
-        // Check for start of player block
-        if (trimmed == "[player]") {
-            // If we were in a previous block, parse it
-            if (in_player_block && !current_player_block.empty()) {
-                Player* player = parsePlayer(current_player_block);
-                if (player != nullptr) {
-                    players.push_back(player);
-                }
+        if (t == "[player]") {
+            if (!block.empty()) {
+                if (Player* p = parsePlayer(block)) players.push_back(p);
+                block.clear();
             }
-            current_player_block.clear();
-            in_player_block = true;
-            continue;
         }
-
-        // If we're in a player block, collect lines
-        if (in_player_block) {
-            current_player_block.push_back(trimmed);
-        }
+        block.push_back(t);
     }
 
-    // Parse the last player block if it exists
-    if (in_player_block && !current_player_block.empty()) {
-        Player* player = parsePlayer(current_player_block);
-        if (player != nullptr) {
-            players.push_back(player);
-        }
+    if (!block.empty()) {
+        if (Player* p = parsePlayer(block)) players.push_back(p);
     }
 
-    file.close();
-
-    if (players.empty()) {
-        std::cerr << "Warning: No players loaded from " << filepath << std::endl;
-        return false;
-    }
-
-    std::cout << "Loaded " << players.size() << " players from " << filepath << std::endl;
-    return true;
+    return !players.empty();
 }

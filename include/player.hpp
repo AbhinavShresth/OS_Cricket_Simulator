@@ -11,22 +11,40 @@ enum class PlayerRole {
     WICKETKEEPER
 };
 
+struct PlayerStats {
+    double fitness = 0.0;
+    double catching_efficiency = 0.0;
+    double clutch_factor = 0.0;
+    double pressure_performance = 0.0;
+    double batting = 0.0;
+    double shot_selection = 0.0;
+    double power_hitting = 0.0;
+    double pace_skill = 0.0;
+    double swing_skill = 0.0;
+    double spin_skill = 0.0;
+    double spin_quantity = 0.0;
+    double line_accuracy = 0.0;
+    double length_control = 0.0;
+};
+
+
 class Player {
 protected:
     std::string name;
     PlayerRole role;
-    double strike_rate;  // For batsmen: runs per 100 balls; For bowlers: can be inversely related
-    double avg;  // Average runs or average economy
+    double strike_rate;
+    double avg;
     int expected_balls;
     int thread_priority;
     bool is_death_specialist;
+    PlayerStats stats;
+   
 
 public:
     Player(const std::string& name, PlayerRole role, double strike_rate, double avg,
-           int expected_balls, int thread_priority, bool is_death_specialist);
+           int expected_balls, int thread_priority, bool is_death_specialist, const PlayerStats& stats);
     virtual ~Player() = default;
 
-    // Getters
     std::string getName() const;
     PlayerRole getRole() const;
     double getStrikeRate() const;
@@ -34,8 +52,7 @@ public:
     int getExpectedBalls() const;
     int getThreadPriority() const;
     bool isDeathSpecialist() const;
-
-    // Setters
+    const PlayerStats& getStats() const;
     void setName(const std::string& name);
     void setPriority(int priority);
 
@@ -50,7 +67,7 @@ private:
 
 public:
     Batsman(const std::string& name, double strike_rate, double avg,
-            int expected_balls, int thread_priority, bool is_death_specialist);
+            int expected_balls, int thread_priority, bool is_death_specialist, const PlayerStats& stats);
 
     int getRunsScored() const;
     int getBallsFaced() const;
@@ -72,9 +89,10 @@ private:
     int wickets_taken = 0;
 
 public:
+
     Bowler(const std::string& name, double strike_rate, double avg,
            int expected_balls, double economy, int max_overs,
-           int thread_priority, bool is_death_specialist);
+           int thread_priority, bool is_death_specialist, const PlayerStats& stats);
 
     double getEconomy() const;
     int getMaxOvers() const;
@@ -88,4 +106,4 @@ public:
     void play() override;
 };
 
-#endif // PLAYER_HPP
+#endif 
