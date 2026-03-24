@@ -42,6 +42,49 @@ void* Player::threadEntry(void* arg) {
     player->threadLoop();
     return nullptr;
 }
+BallData Player::calculateBowling(const PlayerStats& bowler_stats) {
+    thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_real_distribution<> dis(-5.0, 5.0);
+    
+    BallData ball;
+    ball.speed = bowler_stats.pace_skill + dis(gen);
+    ball.swing = bowler_stats.swing_skill + dis(gen);
+    ball.spin  = bowler_stats.spin_skill + dis(gen);
+    
+    return ball;
+}
+
+BattingResult Player::calculateBatting(const BallData& incoming_ball, const PlayerStats& batter_stats) {
+    thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<> dis_quarter(0, 3);
+    std::uniform_real_distribution<> dis_prob(0.0, 1.0);
+
+    BattingResult res;
+    res.hit_quarter = dis_quarter(gen);
+    
+    // Direct wicket probability (e.g., Bowled / LBW bypassing fielders)
+    double miss_prob = 0.05 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
+    res.is_wicket = (dis_prob(gen) < miss_prob); 
+
+    // Calculate exit velocity/stats of the hit ball based on incoming speed and batter power
+    res.hit_ball.speed = incoming_ball.speed * (batter_stats.power_hitting > 0 ? batter_stats.power_hitting : 1.0);
+    res.hit_ball.swing = 0.0;
+    res.hit_ball.spin = 0.0;
+    
+    return res;
+}
+bool Player::calculateFielding(const BallData& hit_ball, const PlayerStats& fielder_stats, int hit_quarter, int fielding_quarter) {
+    if (hit_quarter != fielding_quarter) return false;
+    
+    thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_real_distribution<> dis(0.0, 1.0);
+    
+    // Dynamic difficulty: faster balls are harder to catch
+    double speed_modifier = (hit_ball.speed > 130.0) ? 0.7 : 1.0;
+    double catch_chance = fielder_stats.catching_efficiency * 0.1 * speed_modifier;
+    
+    return (catch_chance > 0.0 && dis(gen) < catch_chance);
+}
 
 void Player::fielderThreadLoop() {
     std::random_device rd;
@@ -64,8 +107,9 @@ void Player::fielderThreadLoop() {
         }
 
         if (!context->ball_dead && !context->is_wicket_this_ball) {
-            double catch_chance = (context->hit_quarter == fielding_quarter) ? stats.catching_efficiency * 0.0001 : 0.0;
-            if (catch_chance > 0.0 && dis(gen) < catch_chance) {
+            bool caught = calculateFielding(context->current_ball, stats, context->hit_quarter, fielding_quarter);
+
+            if (caught) {
                 context->is_wicket_this_ball = true;
                 context->ball_dead = true; 
                 context->runs_scored_this_ball = 0;
@@ -141,14 +185,16 @@ void Player::batsmanThreadLoop(){
 
         pthread_mutex_lock(&context->field_mutex);
         std::cout << "[BAT - " << name << "] Acquired field_mutex." << std::endl;
-        
-        context->hit_quarter = (rand() % 4);
-        context->is_wicket_this_ball = false;
+        BattingResult b_result = calculateBatting(context->current_ball, stats);
+        context->current_ball = b_result.hit_ball;
+        context->hit_quarter = b_result.hit_quarter;
+        context->is_wicket_this_ball = b_result.is_wicket;
         context->runs_scored_this_ball = 0;
+
         context->fielders_pending = 10;
         context->fielders_ready = 0;
-        context->ball_dead = false;
-        context->ball_in_air = true;
+        context->ball_dead = b_result.is_wicket;
+        context->ball_in_air = !b_result.is_wicket;
         
         std::cout << "[BAT - " << name << "] Hit the ball into the field. Broadcasting field_cv." << std::endl;
         pthread_cond_broadcast(&context->field_cv);
@@ -221,9 +267,8 @@ void Bowler::threadLoop() {
             break;
         }
         std::cout << "[BOWL - " << name << "] I am the current bowler and I have thrown it. Broadcasting pitch_cv." << std::endl;
-        
         context->bowler_turn = false;
-        context->current_ball.speed = stats.pace_skill; 
+        context->current_ball= calculateBowling(stats);
         context->ball_delivered = true;
         
         pthread_cond_broadcast(&context->pitch_cv);

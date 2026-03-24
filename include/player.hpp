@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <pthread.h>
+#include "match_context.hpp"
 
 struct MatchContext;
 
@@ -14,6 +15,11 @@ enum class PlayerRole {
     WICKETKEEPER
 };
 
+struct BattingResult {
+    BallData hit_ball;
+    bool is_wicket;
+    int hit_quarter;
+};
 struct PlayerStats {
     double fitness = 0.0;
     double catching_efficiency = 0.0;
@@ -54,6 +60,10 @@ protected:
     virtual void threadLoop() = 0;
     void fielderThreadLoop();
     void batsmanThreadLoop();
+
+    BallData calculateBowling(const PlayerStats& bowler_stats);
+    BattingResult calculateBatting(const BallData& incoming_ball, const PlayerStats& batter_stats);
+    bool calculateFielding(const BallData& hit_ball, const PlayerStats& fielder_stats, int hit_quarter, int fielding_quarter);
 
 public:
     Player(const std::string& name, PlayerRole role, double strike_rate, double avg,
