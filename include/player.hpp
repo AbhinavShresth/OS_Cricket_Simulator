@@ -48,6 +48,7 @@ protected:
     bool is_currently_bowling = false;
     bool is_striker = false;
     bool is_fielding_team = false;
+    bool is_out =false;
 
     static void* threadEntry(void* arg);
     virtual void threadLoop() = 0;
@@ -66,6 +67,7 @@ public:
     int getExpectedBalls() const;
     int getThreadPriority() const;
     bool isDeathSpecialist() const;
+    bool isOut() const;
     const PlayerStats& getStats() const;
 
     void setName(const std::string& name);
@@ -77,7 +79,7 @@ public:
     void setCurrentlyBowling(bool status);
     void setStriker(bool status);
     void setIsFieldingTeam(bool status);
-    
+    void setOut(bool out);
     void startThread();
     void joinThread();
     // // [Mod End]
@@ -89,7 +91,7 @@ class Batsman : public Player {
 private:
     int runs_scored = 0;
     int balls_faced = 0;
-    bool is_out = false;
+    
 
 protected:
     void threadLoop() override;
@@ -100,11 +102,11 @@ public:
 
     int getRunsScored() const;
     int getBallsFaced() const;
-    bool isOut() const;
+    
 
     void addRuns(int runs);
     void addBall();
-    void setOut(bool out);
+    
 
     void play() override;
 };

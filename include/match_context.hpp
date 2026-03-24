@@ -30,6 +30,7 @@ struct MatchContext {
     bool ball_dead = false;
     int hit_quarter = -1; 
     int fielders_pending = 0; 
+    int fielders_ready = 10;
     
     // Play outcome data
     int runs_scored_this_ball = 0;

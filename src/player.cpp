@@ -16,6 +16,7 @@ double Player::getAvg() const { return avg; }
 int Player::getExpectedBalls() const { return expected_balls; }
 int Player::getThreadPriority() const { return thread_priority; }
 bool Player::isDeathSpecialist() const { return is_death_specialist; }
+bool Player::isOut() const { return is_out; }
 const PlayerStats& Player::getStats() const { return stats; }
 
 void Player::setName(const std::string& name) { this->name = name; }
@@ -24,6 +25,7 @@ void Player::setContext(MatchContext* ctx) { context = ctx; }
 void Player::setFieldingQuarter(int quarter) { fielding_quarter = quarter; }
 void Player::setCurrentlyBowling(bool status) { is_currently_bowling = status; }
 void Player::setStriker(bool status) { is_striker = status; }
+void Player::setOut(bool out) { is_out = out; }
 void Player::setIsFieldingTeam(bool status) {is_fielding_team = status;}
 
 
@@ -42,18 +44,18 @@ void* Player::threadEntry(void* arg) {
 }
 
 void Player::fielderThreadLoop() {
- 
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<> dis(0.0, 1.0);
 
     while (context->match_active) {
         pthread_mutex_lock(&context->field_mutex);
-        std::cout << name << " fielder acquired field_mutex" << std::endl;
-        
+        std::cout << "[FIELD - " << name << "] Acquired field_mutex (Phase 1)." << std::endl;
+
         while (!context->ball_in_air && context->match_active) {
-            std::cout << name << " fielder waiting for field_cv" << std::endl;
+            std::cout << "[FIELD - " << name << "] Conditions not met (ball_in_air: " << context->ball_in_air << "). Waiting on field_cv." << std::endl;
             pthread_cond_wait(&context->field_cv, &context->field_mutex);
+            std::cout << "[FIELD - " << name << "] Woke up from field_cv." << std::endl;
         }
 
         if (!context->match_active) {
@@ -62,8 +64,7 @@ void Player::fielderThreadLoop() {
         }
 
         if (!context->ball_dead && !context->is_wicket_this_ball) {
-            double catch_chance = (context->hit_quarter == fielding_quarter) ? stats.catching_efficiency * 0.5 : 0.0;
-            
+            double catch_chance = (context->hit_quarter == fielding_quarter) ? stats.catching_efficiency * 0.0001 : 0.0;
             if (catch_chance > 0.0 && dis(gen) < catch_chance) {
                 context->is_wicket_this_ball = true;
                 context->ball_dead = true; 
@@ -72,76 +73,101 @@ void Player::fielderThreadLoop() {
         }
 
         context->fielders_pending--;
+        std::cout << "[FIELD - " << name << "] Processed ball. fielders_pending = " << context->fielders_pending << std::endl;
 
         if (context->fielders_pending == 0) {
-            std::cout << "I was the last fielder " << name << std::endl;
-            
             if (!context->is_wicket_this_ball) {
                 context->runs_scored_this_ball = (dis(gen) > 0.5) ? 1 : 2;
                 context->ball_dead = true;
             }
-            pthread_cond_signal(&context->umpire_cv);
+            std::cout << "[FIELD - " << name << "] I am the LAST fielder. Signaling umpire_cv." << std::endl;
+            pthread_cond_broadcast(&context->umpire_cv);
         }
 
         while (context->ball_in_air && context->match_active) {
+            std::cout << "[FIELD - " << name << "] Conditions not met (ball_in_air: " << context->ball_in_air << "). Waiting on umpire_cv (Phase 2)." << std::endl;
             pthread_cond_wait(&context->umpire_cv, &context->field_mutex);
+            std::cout << "[FIELD - " << name << "] Woke up from umpire_cv." << std::endl;
         }
-
+        
+        if(!context->match_active){
+            pthread_mutex_unlock(&context->field_mutex);
+            break;
+        }
+        
+        context->fielders_ready++;
+        std::cout << "[FIELD - " << name << "] Escaped trapdoor. fielders_ready = " << context->fielders_ready << std::endl;
+        
+        if (context->fielders_ready == 10){
+            std::cout << "[FIELD - " << name << "] Trapdoor clear. Signaling umpire_cv." << std::endl;
+            pthread_cond_broadcast(&context->umpire_cv);
+        }
+        
+        std::cout << "[FIELD - " << name << "] Releasing field_mutex." << std::endl;
         pthread_mutex_unlock(&context->field_mutex);
     }
 }
 void Player::batsmanThreadLoop(){
     while (context && context->match_active) {
         pthread_mutex_lock(&context->roster_mutex);
+        std::cout << "[BAT - " << name << "] Acquired roster_mutex." << std::endl;
+        
         while (!is_striker && context->match_active){
+            std::cout << "[BAT - " << name << "] Not striker. Waiting on roster_cv." << std::endl;
             pthread_cond_wait(&context->roster_cv, &context->roster_mutex);
+            std::cout << "[BAT - " << name << "] Woke up from roster_cv. is_striker = " << is_striker << std::endl;
         }
         pthread_mutex_unlock(&context->roster_mutex);
+        
         if (!context->match_active) break;
+        
         pthread_mutex_lock(&context->pitch_mutex);
-        std::cout << name <<  "I have the pitch_mutex and i am batsman" << std::endl;
+        std::cout << "[BAT - " << name << "] Acquired pitch_mutex." << std::endl;
         
         while ((!context->ball_delivered || !is_striker) && context->match_active) {
+            std::cout << "[BAT - " << name << "] Conditions not met (ball_delivered: " << context->ball_delivered << ", is_striker: " << is_striker << "). Waiting on pitch_cv." << std::endl;
             pthread_cond_wait(&context->pitch_cv, &context->pitch_mutex);
+            std::cout << "[BAT - " << name << "] Woke up from pitch_cv." << std::endl;
         }
         
         if (!context->match_active) {
             pthread_mutex_unlock(&context->pitch_mutex);
             break;
         }
-        std::cout << name << "I am the striker currently" << std::endl;
+        std::cout << "[BAT - " << name << "] I am the striker currently and consuming ball_delivered." << std::endl;
         
         context->ball_delivered = false;
         pthread_mutex_unlock(&context->pitch_mutex);
 
         pthread_mutex_lock(&context->field_mutex);
+        std::cout << "[BAT - " << name << "] Acquired field_mutex." << std::endl;
+        
         context->hit_quarter = (rand() % 4);
         context->is_wicket_this_ball = false;
         context->runs_scored_this_ball = 0;
         context->fielders_pending = 10;
+        context->fielders_ready = 0;
         context->ball_dead = false;
         context->ball_in_air = true;
-        std::cout << name << "I have hit the ball into the field" << std::endl;
-        pthread_cond_broadcast(&context->field_cv);
-        std::cout << name << "I have removed the pitch_mutex" << std::endl;
         
+        std::cout << "[BAT - " << name << "] Hit the ball into the field. Broadcasting field_cv." << std::endl;
+        pthread_cond_broadcast(&context->field_cv);
+        
+        std::cout << "[BAT - " << name << "] Releasing field_mutex." << std::endl;
         pthread_mutex_unlock(&context->field_mutex);
     }
 }
-
 Batsman::Batsman(const std::string& name, double strike_rate, double avg,
                  int expected_balls, int thread_priority, bool is_death_specialist, const PlayerStats& stats)
     : Player(name, PlayerRole::BATSMAN, strike_rate, avg, expected_balls, thread_priority, is_death_specialist, stats) {}
 
 int Batsman::getRunsScored() const { return runs_scored; }
 int Batsman::getBallsFaced() const { return balls_faced; }
-bool Batsman::isOut() const { return is_out; }
+
 void Batsman::addRuns(int runs) { if (!is_out) runs_scored += runs; }
 void Batsman::addBall() { if (!is_out) balls_faced++; }
-void Batsman::setOut(bool out) { is_out = out; }
-void Batsman::play() {}
 
-// // [Mod Start] Batsman specific thread loop evaluating pitch buffer and signaling field
+void Batsman::play() {}
 void Batsman::threadLoop() {
     if (is_fielding_team){
         fielderThreadLoop();
@@ -170,8 +196,6 @@ void Bowler::addOverBowled(int runs_in_over) {
 }
 void Bowler::addWicket() { wickets_taken++; }
 void Bowler::play() {}
-
-// // [Mod Start] Bowler specific thread loop integrating role evaluation
 void Bowler::threadLoop() {
     if (!is_fielding_team){
         batsmanThreadLoop();
@@ -184,20 +208,19 @@ void Bowler::threadLoop() {
 
     while (context && context->match_active) {
         pthread_mutex_lock(&context->pitch_mutex);
-        std::cout << name << "I have the pitch mutex and i am bowler" << std::endl;
-        
+        std::cout << "[BOWL - " << name << "] Acquired pitch_mutex." << std::endl;
         
         while (!context->bowler_turn && context->match_active) {
-            std::cout << name <<  " I am waiting for bowling turn" << std::endl;
-            
+            std::cout << "[BOWL - " << name << "] Conditions not met (bowler_turn: " << context->bowler_turn << "). Waiting on pitch_cv." << std::endl;
             pthread_cond_wait(&context->pitch_cv, &context->pitch_mutex);
+            std::cout << "[BOWL - " << name << "] Woke up from pitch_cv." << std::endl;
         }
         
         if (!context->match_active) {
             pthread_mutex_unlock(&context->pitch_mutex);
             break;
         }
-        std::cout << name << " I am the current bowler and i have thrown it" << std::endl;
+        std::cout << "[BOWL - " << name << "] I am the current bowler and I have thrown it. Broadcasting pitch_cv." << std::endl;
         
         context->bowler_turn = false;
         context->current_ball.speed = stats.pace_skill; 
@@ -207,4 +230,3 @@ void Bowler::threadLoop() {
         pthread_mutex_unlock(&context->pitch_mutex);
     }
 }
-// // [Mod End]

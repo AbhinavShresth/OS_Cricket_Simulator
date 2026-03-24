@@ -23,8 +23,8 @@ private:
     int wickets = 0;
     int target_overs = 20;  
 
-    Batsman* striker = nullptr;
-    Batsman* non_striker = nullptr;
+    Player* striker = nullptr;
+    Player* non_striker = nullptr;
     Bowler* current_bowler = nullptr;
 
     MatchContext context;

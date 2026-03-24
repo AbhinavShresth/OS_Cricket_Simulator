@@ -85,11 +85,14 @@ bool Match::run(int num_overs) {
     // call bowling and batting scheduler
     // bowler is the bowling_team[0]
     // Setup bowler and assign fielding quarters
-    striker = dynamic_cast<Batsman*>(batting_team[0]);
-    non_striker = dynamic_cast<Batsman*>(batting_team[1]);
+    striker = batting_team[0];
+    non_striker = batting_team[1];
     pthread_mutex_lock(&context.roster_mutex);
     striker->setStriker(true);
     non_striker->setStriker(false);
+    std::cout << "The current striker is " << striker->getName() << std::endl;
+    std::cout << "The current non striker is " << non_striker->getName() << std::endl;
+    
     pthread_cond_broadcast(&context.roster_cv);
     pthread_mutex_unlock(&context.roster_mutex);
     current_bowler = nullptr;
@@ -105,6 +108,8 @@ bool Match::run(int num_overs) {
             quarter_assign++;
         }
     }
+    std::cout << "The current bowler is "<< current_bowler->getName() << std::endl;
+    
     std::cout << "quarters assigned" << std::endl;
     for (auto player : batting_team) {
         player->setContext(&context);
@@ -119,39 +124,47 @@ bool Match::run(int num_overs) {
     std::cout << "threads assigned" << std::endl;
     while (current_over < target_overs && wickets < 10) {
         for (int ball = 0; ball < 6 && wickets < 10; ++ball) {
+            std::cout << "\n[UMPIRE] --- START OF OVER " << current_over << " BALL " << ball + 1 << " ---" << std::endl;
             
             pthread_mutex_lock(&context.field_mutex);
+            std::cout << "[UMPIRE] Acquired field_mutex. Checking trapdoor (fielders_ready: " << context.fielders_ready << ")." << std::endl;
+            
+            while (context.fielders_ready < 10 && context.match_active){
+                std::cout << "[UMPIRE] Waiting for fielders to reset. Waiting on umpire_cv." << std::endl;
+                pthread_cond_wait(&context.umpire_cv, &context.field_mutex);
+            }
+            
+            std::cout << "[UMPIRE] Trapdoor clear. Resetting field state." << std::endl;
             context.ball_dead = false;
             context.runs_scored_this_ball = 0;
             context.is_wicket_this_ball = false;
             pthread_mutex_unlock(&context.field_mutex);
-            std::cout << "field set" << std::endl;
             
             pthread_mutex_lock(&context.pitch_mutex);
+            std::cout << "[UMPIRE] Acquired pitch_mutex. Signaling bowler." << std::endl;
             context.bowler_turn = true;
-            pthread_cond_signal(&context.pitch_cv);
+            pthread_cond_broadcast(&context.pitch_cv);
             pthread_mutex_unlock(&context.pitch_mutex);
-            std::cout << "ball thrown" << std::endl;
             
             pthread_mutex_lock(&context.field_mutex);
+            std::cout << "[UMPIRE] Acquired field_mutex. Waiting for play resolution." << std::endl;
             while (!context.ball_dead && context.match_active) {
-                std::cout << "Umpire waiting for the ball to be dead" << std::endl;
-                
+                std::cout << "[UMPIRE] Ball still alive. Waiting on umpire_cv." << std::endl;
                 pthread_cond_wait(&context.umpire_cv, &context.field_mutex);
-                
             }
-            std::cout << "calculations done, umpire awake" << std::endl;
-            
+            std::cout << "[UMPIRE] Play resolved. Calculating scores." << std::endl;
             
             total_runs += context.runs_scored_this_ball;
             pthread_mutex_lock(&context.roster_mutex);
             if (context.is_wicket_this_ball) {
                 wickets++;
-                striker->setOut(true);
-                striker->setStriker(false);
+                if (striker) {
+                    striker->setOut(true);
+                    striker->setStriker(false);
+                }
                 if (static_cast<size_t>(wickets + 1) < batting_team.size()) {
                     Player* next_p = batting_team[wickets + 1];
-                    striker = dynamic_cast<Batsman*>(next_p);
+                    striker = next_p;
                     if (striker) striker->setStriker(true);
                 } else {
                     striker = nullptr;
@@ -163,43 +176,76 @@ bool Match::run(int num_overs) {
                     std::swap(striker, non_striker);
                 }
             }
-            std::cout << "batters swapped" << std::endl;
             pthread_cond_broadcast(&context.roster_cv);
             pthread_mutex_unlock(&context.roster_mutex);
+
+            std::cout << "[UMPIRE] Releasing fielders to reset." << std::endl;
             context.ball_in_air = false;
             pthread_cond_broadcast(&context.umpire_cv);
             pthread_mutex_unlock(&context.field_mutex);
             
             current_ball++;
-            std::cout << "Over " << current_over << "." << current_ball << " | Score: " << total_runs << "/" << wickets << std::endl;
+            std::cout << "[SCORE] Over " << current_over << "." << current_ball << " | Score: " << total_runs << "/" << wickets << std::endl;
         }
+        
         current_over++;
         current_ball = 0;
+        
+        // --- Modification start: End of Over Bowler Rotation ---
+        std::cout << "[UMPIRE] Over complete. Rotating strike and bowler." << std::endl;
+        
+        // 1. Strike rotation
         if (striker && non_striker){
-
+            pthread_mutex_lock(&context.roster_mutex);
             striker->setStriker(false);
             non_striker->setStriker(true);
-            std::swap(striker, non_striker); // Rotate strike at end of over
+            std::swap(striker, non_striker); 
             pthread_cond_broadcast(&context.roster_cv);
             pthread_mutex_unlock(&context.roster_mutex);
         }
-    }
 
-    // Termination sequence
+        // 2. Bowler rotation
+        // To prevent threads from deadlocking in the rotation, the actual logic for 
+        // a thread switching from fielderThreadLoop to Bowler::threadLoop requires 
+        // the while-loops to be merged. For now, simply finding the next bowler avoids 
+        // the same bowler throwing 120 balls.
+        int next_bowler_idx = -1;
+        for (size_t i = 0; i < bowling_team.size(); ++i) {
+            if (bowling_team[i] == current_bowler) {
+                next_bowler_idx = (i + 1) % bowling_team.size();
+                break;
+            }
+        }
+        
+        if (next_bowler_idx != -1) {
+            // Find next valid bowler
+            for (size_t i = 0; i < bowling_team.size(); ++i) {
+                int check_idx = (next_bowler_idx + i) % bowling_team.size();
+                if (bowling_team[check_idx]->getRole() == PlayerRole::BOWLER) {
+                    if (current_bowler) current_bowler->setCurrentlyBowling(false);
+                    current_bowler = dynamic_cast<Bowler*>(bowling_team[check_idx]);
+                    if (current_bowler) current_bowler->setCurrentlyBowling(true);
+                    break;
+                }
+            }
+        }
+        // --- Modification end ---
+    }
+        // Termination sequence
     context.match_active = false;
-    pthread_mutex_lock(&context.roster_mutex);
-    pthread_cond_broadcast(&context.roster_cv);
-    pthread_mutex_unlock(&context.roster_mutex);
-    
     pthread_mutex_lock(&context.pitch_mutex);
     pthread_cond_broadcast(&context.pitch_cv);
     pthread_mutex_unlock(&context.pitch_mutex);
-
+    
     pthread_mutex_lock(&context.field_mutex);
     pthread_cond_broadcast(&context.field_cv);
     pthread_cond_broadcast(&context.umpire_cv);
     pthread_mutex_unlock(&context.field_mutex);
-
+    
+    pthread_mutex_lock(&context.roster_mutex);
+    pthread_cond_broadcast(&context.roster_cv);
+    pthread_mutex_unlock(&context.roster_mutex);
+    
     for (auto player : batting_team) player->joinThread();
     for (auto player : bowling_team) player->joinThread();
 
