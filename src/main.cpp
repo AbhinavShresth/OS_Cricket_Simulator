@@ -4,16 +4,33 @@
 #include <vector>
 
 int main() {
-    // std::vector<PlayerData> indiaPlayers;
-    // std::vector<PlayerData> ausPlayers;
+    try {
+        // Create a match instance
+        Match match;
 
-    // TeamLoader::load("stats/india.txt",     indiaPlayers);
-    // TeamLoader::load("stats/australia.txt", ausPlayers);
+        // Start the match by loading both teams
+        if (!match.start("stats/india.txt", "stats/australia.txt")) {
+            std::cerr << "Failed to start match" << std::endl;
+            return 1;
+        }
 
-    // Match match(indiaPlayers, ausPlayers);
-    // match.toss();
-    // match.start();
+        // Conduct the toss
+        if (!match.toss()) {
+            std::cerr << "Failed to conduct toss" << std::endl;
+            return 1;
+        }
 
-    std::cout << "Done\n";
+        // Run the match simulation for 20 overs
+        if (!match.run(20)) {
+            std::cerr << "Failed to run match" << std::endl;
+            return 1;
+        }
+
+        std::cout << "\nMatch completed successfully!" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+
     return 0;
 }
