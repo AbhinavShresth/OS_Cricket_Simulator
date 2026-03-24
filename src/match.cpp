@@ -13,20 +13,20 @@ Match::~Match() {
     cleanup();
 }
 
-bool Match::start(const std::string& india_path, const std::string& australia_path) {
+bool Match::start(const std::string& india_path, const std::string& england_path) {
     std::cout << "\n=== Starting Match Setup ===" << std::endl;
     
     // Load both teams using TeamLoader
     bool india_loaded = TeamLoader::load(india_path, india_team);
-    bool australia_loaded = TeamLoader::load(australia_path, australia_team);
+    bool england_loaded = TeamLoader::load(england_path, england_team);
 
-    if (!india_loaded || !australia_loaded) {
+    if (!india_loaded || !england_loaded) {
         std::cerr << "Error: Failed to load one or both teams" << std::endl;
         return false;
     }
 
     std::cout << "India team: " << india_team.size() << " players" << std::endl;
-    std::cout << "Australia team: " << australia_team.size() << " players" << std::endl;
+    std::cout << "England team: " << england_team.size() << " players" << std::endl;
 
     // Print loaded players
     std::cout << "\n--- India Team ---" << std::endl;
@@ -35,10 +35,10 @@ bool Match::start(const std::string& india_path, const std::string& australia_pa
                   << " (" << static_cast<int>(india_team[i]->getRole()) << ")" << std::endl;
     }
 
-    std::cout << "\n--- Australia Team ---" << std::endl;
-    for (size_t i = 0; i < australia_team.size(); ++i) {
-        std::cout << (i + 1) << ". " << australia_team[i]->getName() 
-                  << " (" << static_cast<int>(australia_team[i]->getRole()) << ")" << std::endl;
+    std::cout << "\n--- England Team ---" << std::endl;
+    for (size_t i = 0; i < england_team.size(); ++i) {
+        std::cout << (i + 1) << ". " << england_team[i]->getName() 
+                  << " (" << static_cast<int>(england_team[i]->getRole()) << ")" << std::endl;
     }
 
     return true;
@@ -57,17 +57,17 @@ bool Match::toss() {
     if (toss_result == 0) {
         // India wins toss, chooses to bat
         batting_team = india_team;
-        bowling_team = australia_team;
+        bowling_team = england_team;
         batting_team_name = "India";
-        bowling_team_name = "Australia";
+        bowling_team_name = "England";
         std::cout << "India wins the toss and chooses to bat!" << std::endl;
     } else {
-        // Australia wins toss, chooses to bat
-        batting_team = australia_team;
+        // England wins toss, chooses to bat
+        batting_team = england_team;
         bowling_team = india_team;
-        batting_team_name = "Australia";
+        batting_team_name = "England";
         bowling_team_name = "India";
-        std::cout << "Australia wins the toss and chooses to bat!" << std::endl;
+        std::cout << "England wins the toss and chooses to bat!" << std::endl;
     }
 
     std::cout << batting_team_name << " will bat first" << std::endl;
@@ -232,15 +232,14 @@ int Match::getWickets() const {
 }
 
 void Match::cleanup() {
-    // Delete all allocated player objects
     for (auto player : india_team) {
         delete player;
     }
-    for (auto player : australia_team) {
+    for (auto player : england_team) {
         delete player;
     }
     india_team.clear();
-    australia_team.clear();
+    england_team.clear();
     batting_team.clear();
     bowling_team.clear();
 }

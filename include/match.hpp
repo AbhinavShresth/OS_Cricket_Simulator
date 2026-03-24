@@ -8,11 +8,8 @@
 
 class Match {
 private:
-    // Team data
     std::vector<Player*> india_team;
-    std::vector<Player*> australia_team;
-
-    // Match state
+    std::vector<Player*> england_team;
     std::vector<Player*> batting_team;
     std::vector<Player*> bowling_team;
     std::string batting_team_name;
