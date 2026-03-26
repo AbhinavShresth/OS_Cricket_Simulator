@@ -2,33 +2,30 @@
 #include "match.hpp"
 #include <iostream>
 #include <vector>
-
+using namespace std;
 int main() {
     try {
-        // Create a match instance
         Match match;
-
-        // Start the match by loading both teams
         if (!match.start("stats/india.txt", "stats/england.txt")) {
-            std::cerr << "Failed to start match" << std::endl;
+            cerr << "Failed to start match" << endl;
+            
             return 1;
         }
-
-        // Conduct the toss
         if (!match.toss()) {
-            std::cerr << "Failed to conduct toss" << std::endl;
+            cerr << "Failed to conduct toss" << endl;
+            cout.flush();
+            return 1;
+        }
+        cout << "starting match now" << endl;
+         cout.flush();
+        if (!match.run(20000)) {
+            cerr << "Failed to run match" << endl;
             return 1;
         }
 
-        // Run the match simulation for 20 overs
-        if (!match.run(20)) {
-            std::cerr << "Failed to run match" << std::endl;
-            return 1;
-        }
-
-        std::cout << "\nMatch completed successfully!" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        cout << "\nMatch completed successfully!" << endl;
+    } catch (const exception& e) {
+        cerr << "Error: " << e.what() << endl;
         return 1;
     }
 
