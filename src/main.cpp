@@ -18,7 +18,7 @@ int main() {
         }
         cout << "starting match now" << endl;
          cout.flush();
-        if (!match.run(200)) {
+        if (!match.run(20000)) {
             cerr << "Failed to run match" << endl;
             return 1;
         }

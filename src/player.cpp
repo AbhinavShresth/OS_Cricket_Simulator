@@ -63,14 +63,15 @@ BattingResult Player::calculateBatting(const BallData& incoming_ball, const Play
     res.hit_quarter = dis_quarter(gen);
     
     // Direct wicket probability (e.g., Bowled / LBW bypassing fielders)
-    double miss_prob = 0.05 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
+    double miss_prob = 0.0005 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
     res.is_wicket = (dis_prob(gen) < miss_prob); 
 
     // Calculate exit velocity/stats of the hit ball based on incoming speed and batter power
     res.hit_ball.speed = incoming_ball.speed * (batter_stats.power_hitting > 0 ? batter_stats.power_hitting : 1.0);
     res.hit_ball.swing = 0.0;
     res.hit_ball.spin = 0.0;
-    
+    std::cout << "Is Wicket? " << res.is_wicket << "Quarter? " << res.hit_quarter << std::endl;
+        
     return res;
 }
 bool Player::calculateFielding(const BallData& hit_ball, const PlayerStats& fielder_stats, int hit_quarter, int fielding_quarter) {
@@ -81,7 +82,7 @@ bool Player::calculateFielding(const BallData& hit_ball, const PlayerStats& fiel
     
     // Dynamic difficulty: faster balls are harder to catch
     double speed_modifier = (hit_ball.speed > 130.0) ? 0.7 : 1.0;
-    double catch_chance = fielder_stats.catching_efficiency * 0.1 * speed_modifier;
+    double catch_chance = fielder_stats.catching_efficiency * 0.001 * speed_modifier;
     
     return (catch_chance > 0.0 && dis(gen) < catch_chance);
 }
@@ -194,7 +195,7 @@ void Player::batsmanThreadLoop(){
         context->fielders_pending = 10;
         context->fielders_ready = 0;
         context->ball_dead = b_result.is_wicket;
-        context->ball_in_air = !b_result.is_wicket;
+        context->ball_in_air = true;
         
         std::cout << "[BAT - " << name << "] Hit the ball into the field. Broadcasting field_cv." << std::endl;
         pthread_cond_broadcast(&context->field_cv);
