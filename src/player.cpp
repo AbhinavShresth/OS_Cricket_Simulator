@@ -134,39 +134,58 @@ BattingResult Player::calculateBatting(const BallData& incoming_ball, const Play
 
     BattingResult res;
     res.hit_quarter = dis_quarter(gen);
-    
-    // Base wicket probability (e.g., Bowled / LBW bypassing fielders)
-    double miss_prob = 0.0005 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
 
-    // SJF scaling: wicket probability is proportional to 1/expected_balls.
-    // A batsman with fewer expected balls is proportionally more likely to be out.
-    // E.g. with reference_expected_balls=25: a batsman with expected_balls=5 gets
-    // factor=5, so they are 5x as likely to be dismissed as one with expected_balls=25.
+    // --- Delivery danger: combines pace, movement, and bowler accuracy ---
+    const double speed_norm  = std::max(0.0, std::min(1.0, (incoming_ball.speed - 80.0) / 120.0));
+    const double movement    = std::abs(incoming_ball.swing) + std::abs(incoming_ball.spin);
+    const double move_norm   = std::max(0.0, std::min(1.0, movement / 10.0));
+    const double ctrl_factor = context
+        ? (context->bowler_snap.line_accuracy * 0.5 + context->bowler_snap.length_control * 0.5)
+        : 0.5;
+    const double delivery_danger = 0.30 * speed_norm + 0.35 * move_norm + 0.35 * ctrl_factor;
+
+    // --- Batter skill: blends defence and shot selection ---
+    const double batter_skill = std::max(0.10,
+        batter_stats.batting * 0.65 + batter_stats.shot_selection * 0.35);
+
+    // --- Bowled / LBW probability (~3% base for avg delivery vs avg batter) ---
+    double miss_prob = 0.055 * delivery_danger / batter_skill;
+    miss_prob = std::min(miss_prob, 0.25);  // cap at 25%
+
+    // SJF scaling: batter with shorter expected tenure more likely to be dismissed.
     if (context && context->sjf_mode && expected_balls > 0) {
         miss_prob *= static_cast<double>(context->reference_expected_balls) /
                      static_cast<double>(expected_balls);
+        miss_prob = std::min(miss_prob, 0.35);
     }
 
-    res.is_wicket = (dis_prob(gen) < miss_prob); 
+    res.is_wicket = (dis_prob(gen) < miss_prob);
+
+    // --- Aerial shot: aggressive batters hit more in the air (catchable) ---
+    const double aerial_base = 0.15 + 0.20 * std::max(0.0, std::min(1.0,
+                                          (batter_stats.power_hitting - 0.3) / 0.7));
+    res.is_aerial = (dis_prob(gen) < aerial_base);
 
     // Calculate post-contact ball profile for the fielding phase.
     res.hit_ball.speed = incoming_ball.speed * (batter_stats.power_hitting > 0 ? batter_stats.power_hitting : 1.0);
-    // Movement reduces after contact, but does not vanish.
     res.hit_ball.swing = incoming_ball.swing * 0.35;
-    res.hit_ball.spin = incoming_ball.spin * 0.35;
-    std::cout << "Is Wicket? " << res.is_wicket << "Quarter? " << res.hit_quarter << std::endl;
-        
+    res.hit_ball.spin  = incoming_ball.spin  * 0.35;
+
     return res;
 }
 bool Player::calculateFielding(const BallData& hit_ball, const PlayerStats& fielder_stats, int hit_quarter, int fielding_quarter) {
     if (hit_quarter != fielding_quarter) return false;
-    
+
+    // Ground shots are not catchable; only aerial balls can produce a catch.
+    if (context && !context->is_aerial_this_ball) return false;
+
     thread_local std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<> dis(0.0, 1.0);
     
-    // Dynamic difficulty: faster balls are harder to catch
-    double speed_modifier = (hit_ball.speed > 130.0) ? 0.7 : 1.0;
-    double catch_chance = fielder_stats.catching_efficiency * 0.001 * speed_modifier;
+    // Harder/faster balls are slightly harder to hold.
+    const double speed_modifier = (hit_ball.speed > 130.0) ? 0.85 : 1.0;
+    // Realistic catch probability per eligible fielder: ~15-35%.
+    const double catch_chance = fielder_stats.catching_efficiency * 0.35 * speed_modifier;
     
     return (catch_chance > 0.0 && dis(gen) < catch_chance);
 }
@@ -197,6 +216,7 @@ void Player::fielderThreadLoop() {
                 context->is_wicket_this_ball = true;
                 context->ball_dead = true; 
                 context->runs_scored_this_ball = 0;
+                context->catcher_name = name;
             }
         }
 
@@ -274,6 +294,8 @@ void Player::batsmanThreadLoop(){
         context->current_ball = b_result.hit_ball;
         context->hit_quarter = b_result.hit_quarter;
         context->is_wicket_this_ball = b_result.is_wicket;
+        context->is_aerial_this_ball = b_result.is_aerial;
+        context->catcher_name.clear();
         context->runs_scored_this_ball = 0;
         context->striker_this_ball.batting = stats.batting;
         context->striker_this_ball.shot_selection = stats.shot_selection;
@@ -363,6 +385,9 @@ void Bowler::threadLoop() {
         // and the umpire should add +1 run while not counting this delivery.
         context->bowler_turn = false;
         context->current_ball = calculateBowling(stats);
+        // Record bowler accuracy for batter's wicket-probability calculation.
+        context->bowler_snap.line_accuracy  = stats.line_accuracy;
+        context->bowler_snap.length_control = stats.length_control;
 
         const BallData delivery = context->current_ball;
         const double line_term = clamp01(1.0 - stats.line_accuracy);

@@ -18,6 +18,7 @@ enum class PlayerRole {
 struct BattingResult {
     BallData hit_ball;
     bool is_wicket;
+    bool is_aerial;   ///< true if hit in the air (catchable by a fielder)
     int hit_quarter;
 };
 struct PlayerStats {

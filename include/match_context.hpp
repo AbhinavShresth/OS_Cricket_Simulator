@@ -2,6 +2,7 @@
 #define MATCH_CONTEXT_HPP
 
 #include <pthread.h>
+#include <string>
 
 struct BallData {
     double speed = 0.0;
@@ -16,6 +17,12 @@ struct StrikerBattingSnapshot {
     double power_hitting = 0.5;
     double strike_rate = 125.0;
     int expected_balls = 18;
+};
+
+/// Snapshot of current bowler's control attributes (set when the bowler bowls).
+struct BowlerBowlingSnapshot {
+    double line_accuracy  = 0.5;
+    double length_control = 0.5;
 };
 
 struct MatchContext {
@@ -45,8 +52,13 @@ struct MatchContext {
     int runs_scored_this_ball = 0;
     bool is_wicket_this_ball = false;
     bool is_wide_this_ball = false;
+    /// True when the batter hit the ball in the air (catchable).
+    bool is_aerial_this_ball = false;
+    /// Name of the fielder who took the catch (empty if not a catch dismissal).
+    std::string catcher_name;
     StrikerBattingSnapshot striker_this_ball;
-    
+    BowlerBowlingSnapshot  bowler_snap;
+
     // Global simulation state
     bool match_active = true;
 
