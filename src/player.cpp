@@ -1,7 +1,49 @@
 #include "player.hpp"
 #include "match_context.hpp"
+#include <cmath>
 #include <iostream>
 #include <random>
+
+namespace {
+
+double clamp01(double x) {
+    if (x < 0.0) return 0.0;
+    if (x > 1.0) return 1.0;
+    return x;
+}
+
+/// Maps hit-ball speed (from bowler pace × power_hitting) and striker skills to 1/2/4/6.
+int sampleRunsFromHit(const BallData& hit_ball, const StrikerBattingSnapshot& s, std::mt19937& gen) {
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    const double hit_strength = clamp01((hit_ball.speed - 35.0) / 170.0);
+    const double movement = clamp01((std::abs(hit_ball.swing) + std::abs(hit_ball.spin)) / 10.0);
+    const double bat = clamp01(s.batting);
+    const double powh = clamp01(s.power_hitting);
+    const double sel = clamp01(s.shot_selection);
+    const double sr_norm = clamp01((s.strike_rate - 110.0) / 75.0);
+    const double expected_norm = clamp01((static_cast<double>(s.expected_balls) - 8.0) / 30.0);
+
+    const double clean_contact = 1.0 - 0.55 * movement;  // More movement means less clean striking.
+    const double scramble_factor = 1.0 + 0.45 * movement; // More movement means fewer boundaries, more running.
+    const double anchor_factor = 1.0 + 0.35 * expected_norm; // Anchor profile: favors strike rotation.
+    const double attack_factor = 1.0 - 0.28 * expected_norm; // Lower expected balls => more boundary intent.
+
+    double w6 = (0.015 + 0.50 * hit_strength * hit_strength * powh * (0.4 + 0.6 * sr_norm) * clean_contact) * attack_factor;
+    double w4 = (0.045 + 0.55 * hit_strength * (0.45 * powh + 0.55 * bat) * (0.65 + 0.35 * sr_norm) * clean_contact) * attack_factor;
+    double w2 = (0.10 + 0.40 * sel * std::sqrt(std::max(0.0, 1.0 - 0.6 * hit_strength)) + 0.12 * bat) * scramble_factor * anchor_factor;
+    double w1 = (0.28 + 0.22 * bat * sel + 0.12 * (1.0 - hit_strength)) * scramble_factor * anchor_factor;
+
+    const double sum = w1 + w2 + w4 + w6;
+    double r = uni(gen) * sum;
+    if (r < w6) return 6;
+    r -= w6;
+    if (r < w4) return 4;
+    r -= w4;
+    if (r < w2) return 2;
+    return 1;
+}
+
+}  // namespace
 
 Player::Player(const std::string& name, PlayerRole role, double strike_rate, double avg,
                int expected_balls, int thread_priority, bool is_death_specialist, const PlayerStats& stats)
@@ -66,10 +108,11 @@ BattingResult Player::calculateBatting(const BallData& incoming_ball, const Play
     double miss_prob = 0.0005 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
     res.is_wicket = (dis_prob(gen) < miss_prob); 
 
-    // Calculate exit velocity/stats of the hit ball based on incoming speed and batter power
+    // Calculate post-contact ball profile for the fielding phase.
     res.hit_ball.speed = incoming_ball.speed * (batter_stats.power_hitting > 0 ? batter_stats.power_hitting : 1.0);
-    res.hit_ball.swing = 0.0;
-    res.hit_ball.spin = 0.0;
+    // Movement reduces after contact, but does not vanish.
+    res.hit_ball.swing = incoming_ball.swing * 0.35;
+    res.hit_ball.spin = incoming_ball.spin * 0.35;
     std::cout << "Is Wicket? " << res.is_wicket << "Quarter? " << res.hit_quarter << std::endl;
         
     return res;
@@ -90,7 +133,6 @@ bool Player::calculateFielding(const BallData& hit_ball, const PlayerStats& fiel
 void Player::fielderThreadLoop() {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(0.0, 1.0);
 
     while (context->match_active) {
         pthread_mutex_lock(&context->field_mutex);
@@ -122,7 +164,8 @@ void Player::fielderThreadLoop() {
 
         if (context->fielders_pending == 0) {
             if (!context->is_wicket_this_ball) {
-                context->runs_scored_this_ball = (dis(gen) > 0.5) ? 1 : 2;
+                context->runs_scored_this_ball =
+                    sampleRunsFromHit(context->current_ball, context->striker_this_ball, gen);
                 context->ball_dead = true;
             }
             std::cout << "[FIELD - " << name << "] I am the LAST fielder. Signaling umpire_cv." << std::endl;
@@ -191,6 +234,11 @@ void Player::batsmanThreadLoop(){
         context->hit_quarter = b_result.hit_quarter;
         context->is_wicket_this_ball = b_result.is_wicket;
         context->runs_scored_this_ball = 0;
+        context->striker_this_ball.batting = stats.batting;
+        context->striker_this_ball.shot_selection = stats.shot_selection;
+        context->striker_this_ball.power_hitting = stats.power_hitting;
+        context->striker_this_ball.strike_rate = getStrikeRate();
+        context->striker_this_ball.expected_balls = getExpectedBalls();
 
         context->fielders_pending = 10;
         context->fielders_ready = 0;
@@ -253,6 +301,9 @@ void Bowler::threadLoop() {
         return;
     }
 
+    thread_local std::mt19937 gen(std::random_device{}());
+    std::uniform_real_distribution<double> dis(0.0, 1.0);
+
     while (context && context->match_active) {
         pthread_mutex_lock(&context->pitch_mutex);
         std::cout << "[BOWL - " << name << "] Acquired pitch_mutex." << std::endl;
@@ -267,11 +318,43 @@ void Bowler::threadLoop() {
             pthread_mutex_unlock(&context->pitch_mutex);
             break;
         }
-        std::cout << "[BOWL - " << name << "] I am the current bowler and I have thrown it. Broadcasting pitch_cv." << std::endl;
+        // Decide if this delivery is a WIDE. If it is, batsman/fielders should not act
+        // and the umpire should add +1 run while not counting this delivery.
         context->bowler_turn = false;
-        context->current_ball= calculateBowling(stats);
+        context->current_ball = calculateBowling(stats);
+
+        const BallData delivery = context->current_ball;
+        const double line_term = clamp01(1.0 - stats.line_accuracy);
+        const double length_term = clamp01(1.0 - stats.length_control);
+        const double movement_term =
+            clamp01((std::abs(delivery.swing) + std::abs(delivery.spin)) / 10.0);
+        const double speed_term = clamp01(delivery.speed / 200.0);
+
+        double wide_prob =
+            0.01 + 0.18 * line_term + 0.14 * length_term + 0.06 * movement_term + 0.03 * speed_term;
+        wide_prob = clamp01(wide_prob);
+
+        bool is_wide = (dis(gen) < wide_prob);
+        if (is_wide) {
+            // Complete umpire resolution immediately.
+            context->ball_delivered = false;
+            pthread_mutex_unlock(&context->pitch_mutex);
+
+            pthread_mutex_lock(&context->field_mutex);
+            context->is_wide_this_ball = true;
+            context->is_wicket_this_ball = false;
+            context->runs_scored_this_ball = 1; // WIDE adds 1 run
+            context->ball_dead = true;
+            context->ball_in_air = false;
+
+            std::cout << "[BOWL - " << name << "] WIDE! Signaling umpire." << std::endl;
+            pthread_cond_broadcast(&context->umpire_cv);
+            pthread_mutex_unlock(&context->field_mutex);
+            continue;
+        }
+
+        std::cout << "[BOWL - " << name << "] I am the current bowler and I have thrown it. Broadcasting pitch_cv." << std::endl;
         context->ball_delivered = true;
-        
         pthread_cond_broadcast(&context->pitch_cv);
         pthread_mutex_unlock(&context->pitch_mutex);
     }

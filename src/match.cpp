@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <random>
+#include <utility>
 
 Match::Match() {}
 
@@ -71,8 +72,7 @@ void Match::setBowlingOrder(const std::vector<int>& new_indices) {
     bowling_team = temp_team;
 }
 
-// --- Modification start: Main Umpire execution loop and thread management ---
-bool Match::run(int num_overs) {
+std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
     target_overs = num_overs;
     total_runs = 0;
     wickets = 0;
@@ -123,8 +123,9 @@ bool Match::run(int num_overs) {
     }
     std::cout << "threads assigned" << std::endl;
     while (current_over < target_overs && wickets < 10) {
-        for (int ball = 0; ball < 6 && wickets < 10; ++ball) {
-            std::cout << "\n[UMPIRE] --- START OF OVER " << current_over << " BALL " << ball + 1 << " ---" << std::endl;
+        if (chase_target > 0 && total_runs >= chase_target) break;
+        while (current_ball < 6 && wickets < 10) {
+            std::cout << "\n[UMPIRE] --- START OF OVER " << current_over << " BALL " << current_ball + 1 << " ---" << std::endl;
             
             pthread_mutex_lock(&context.field_mutex);
             std::cout << "[UMPIRE] Acquired field_mutex. Checking trapdoor (fielders_ready: " << context.fielders_ready << ")." << std::endl;
@@ -138,6 +139,8 @@ bool Match::run(int num_overs) {
             context.ball_dead = false;
             context.runs_scored_this_ball = 0;
             context.is_wicket_this_ball = false;
+            context.is_wide_this_ball = false;
+            context.ball_in_air = false;
             pthread_mutex_unlock(&context.field_mutex);
             
             pthread_mutex_lock(&context.pitch_mutex);
@@ -155,37 +158,41 @@ bool Match::run(int num_overs) {
             std::cout << "[UMPIRE] Play resolved. Calculating scores." << std::endl;
             
             total_runs += context.runs_scored_this_ball;
-            pthread_mutex_lock(&context.roster_mutex);
-            if (context.is_wicket_this_ball) {
-                wickets++;
-                if (striker) {
-                    striker->setOut(true);
-                    striker->setStriker(false);
+            if (!context.is_wide_this_ball) {
+                pthread_mutex_lock(&context.roster_mutex);
+                if (context.is_wicket_this_ball) {
+                    wickets++;
+                    if (striker) {
+                        striker->setOut(true);
+                        striker->setStriker(false);
+                    }
+                    if (static_cast<size_t>(wickets + 1) < batting_team.size()) {
+                        Player* next_p = batting_team[wickets + 1];
+                        striker = next_p;
+                        if (striker) striker->setStriker(true);
+                    } else {
+                        striker = nullptr;
+                    }
+                } else if (context.runs_scored_this_ball % 2 != 0) {
+                    if (striker && non_striker){
+                        striker->setStriker(false);
+                        non_striker->setStriker(true);
+                        std::swap(striker, non_striker);
+                    }
                 }
-                if (static_cast<size_t>(wickets + 1) < batting_team.size()) {
-                    Player* next_p = batting_team[wickets + 1];
-                    striker = next_p;
-                    if (striker) striker->setStriker(true);
-                } else {
-                    striker = nullptr;
-                }
-            } else if (context.runs_scored_this_ball % 2 != 0) {
-                if (striker && non_striker){
-                    striker->setStriker(false);
-                    non_striker->setStriker(true);
-                    std::swap(striker, non_striker);
-                }
+                pthread_cond_broadcast(&context.roster_cv);
+                pthread_mutex_unlock(&context.roster_mutex);
             }
-            pthread_cond_broadcast(&context.roster_cv);
-            pthread_mutex_unlock(&context.roster_mutex);
 
             std::cout << "[UMPIRE] Releasing fielders to reset." << std::endl;
             context.ball_in_air = false;
             pthread_cond_broadcast(&context.umpire_cv);
             pthread_mutex_unlock(&context.field_mutex);
             
-            current_ball++;
+            if (!context.is_wide_this_ball) current_ball++;
             std::cout << "[SCORE] Over " << current_over << "." << current_ball << " | Score: " << total_runs << "/" << wickets << std::endl;
+
+            if (chase_target > 0 && total_runs >= chase_target) break;
         }
         
         current_over++;
@@ -248,6 +255,61 @@ bool Match::run(int num_overs) {
     
     for (auto player : batting_team) player->joinThread();
     for (auto player : bowling_team) player->joinThread();
+
+    return {total_runs, wickets};
+}
+
+// --- Modification start: Main Umpire execution loop and thread management ---
+bool Match::run(int num_overs) {
+    const std::string first_innings_batting = batting_team_name;
+    const std::string first_innings_bowling = bowling_team_name;
+
+    std::cout << "\n========== FIRST INNINGS ==========\n";
+    auto first_innings = runInnings(num_overs);
+    const int first_runs = first_innings.first;
+    const int first_wickets = first_innings.second;
+    const int target = first_runs + 1;
+
+    std::cout << "[INNINGS END] " << first_innings_batting << " scored "
+              << first_runs << "/" << first_wickets << std::endl;
+    std::cout << "[TARGET] " << first_innings_bowling << " need " << target
+              << " to win.\n";
+
+    // Swap innings.
+    std::swap(batting_team, bowling_team);
+    std::swap(batting_team_name, bowling_team_name);
+
+    // Reset per-player transient state before spawning second-innings threads.
+    for (auto player : india_team) {
+        player->setOut(false);
+        player->setStriker(false);
+        player->setCurrentlyBowling(false);
+    }
+    for (auto player : england_team) {
+        player->setOut(false);
+        player->setStriker(false);
+        player->setCurrentlyBowling(false);
+    }
+
+    std::cout << "\n========== SECOND INNINGS ==========\n";
+    auto second_innings = runInnings(num_overs, target);
+    const int second_runs = second_innings.first;
+    const int second_wickets = second_innings.second;
+
+    std::cout << "[INNINGS END] " << batting_team_name << " scored "
+              << second_runs << "/" << second_wickets << std::endl;
+
+    if (second_runs >= target) {
+        const int wickets_remaining = 10 - second_wickets;
+        std::cout << "\n[RESULT] " << batting_team_name << " won by "
+                  << wickets_remaining << " wickets.\n";
+    } else if (second_runs < first_runs) {
+        const int margin = first_runs - second_runs;
+        std::cout << "\n[RESULT] " << first_innings_batting << " won by "
+                  << margin << " runs.\n";
+    } else {
+        std::cout << "\n[RESULT] Match tied.\n";
+    }
 
     return true;
 }

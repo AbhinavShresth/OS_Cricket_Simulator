@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <utility>
 
 class Match {
 private:
@@ -54,6 +55,7 @@ public:
 
 private:
     void simulateBall();
+    std::pair<int, int> runInnings(int num_overs, int chase_target = -1);
     void cleanup();
 };
 

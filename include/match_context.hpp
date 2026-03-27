@@ -9,6 +9,15 @@ struct BallData {
     double spin = 0.0;
 };
 
+/// Snapshot of striker attributes for this delivery (set when the ball is hit).
+struct StrikerBattingSnapshot {
+    double batting = 0.5;
+    double shot_selection = 0.5;
+    double power_hitting = 0.5;
+    double strike_rate = 125.0;
+    int expected_balls = 18;
+};
+
 struct MatchContext {
 
     // Bowler to Umpire/Batsman synchronization
@@ -35,6 +44,8 @@ struct MatchContext {
     // Play outcome data
     int runs_scored_this_ball = 0;
     bool is_wicket_this_ball = false;
+    bool is_wide_this_ball = false;
+    StrikerBattingSnapshot striker_this_ball;
     
     // Global simulation state
     bool match_active = true;
