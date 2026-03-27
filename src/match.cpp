@@ -4,6 +4,9 @@
 #include <cstdlib>
 #include <random>
 #include <utility>
+#include <algorithm>
+#include <numeric>
+#include <iomanip>
 
 Match::Match() {}
 
@@ -72,6 +75,95 @@ void Match::setBowlingOrder(const std::vector<int>& new_indices) {
     bowling_team = temp_team;
 }
 
+// ---------------------------------------------------------------------------
+// Scheduler: sort batting_team and log the resulting order
+// ---------------------------------------------------------------------------
+void Match::applyBattingScheduler(const std::string& innings_label) {
+    const char* tag = (scheduler_type == SchedulerType::FCFS) ? "FCFS" : "SJF";
+
+    if (scheduler_type == SchedulerType::FCFS) {
+        // FCFS: descending thread_priority (higher priority bats earlier).
+        // stable_sort preserves original file order for ties.
+        std::stable_sort(batting_team.begin(), batting_team.end(),
+            [](const Player* a, const Player* b) {
+                return a->getThreadPriority() > b->getThreadPriority();
+            });
+    } else {
+        // SJF: ascending expected_balls (shorter expected tenure bats earlier).
+        std::stable_sort(batting_team.begin(), batting_team.end(),
+            [](const Player* a, const Player* b) {
+                return a->getExpectedBalls() < b->getExpectedBalls();
+            });
+    }
+
+    std::cout << "\n[" << tag << "] " << innings_label << " batting order:\n";
+    for (size_t i = 0; i < batting_team.size(); ++i) {
+        const Player* p = batting_team[i];
+        if (scheduler_type == SchedulerType::FCFS) {
+            std::cout << "[" << tag << "]  #" << (i + 1)
+                      << " " << p->getName()
+                      << "  (thread_priority=" << p->getThreadPriority()
+                      << ", expected_balls=" << p->getExpectedBalls() << ")\n";
+        } else {
+            std::cout << "[" << tag << "]  #" << (i + 1)
+                      << " " << p->getName()
+                      << "  (expected_balls=" << p->getExpectedBalls()
+                      << ", thread_priority=" << p->getThreadPriority() << ")\n";
+        }
+    }
+    std::cout << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// Waiting-time analysis
+// ---------------------------------------------------------------------------
+void Match::printWaitingTimeAnalysis(const std::string& innings_label) const {
+    const char* tag = (scheduler_type == SchedulerType::FCFS) ? "FCFS" : "SJF";
+    const size_t n = batting_team.size();
+
+    std::cout << "\n[" << tag << "-WAIT] " << innings_label << " waiting times (legal balls from innings start):\n";
+    for (size_t i = 0; i < n && i < crease_entry_ball.size(); ++i) {
+        int entry = crease_entry_ball[i];
+        int faced = (i < first_faced_ball.size() && has_faced_ball[i]) ? first_faced_ball[i] : -1;
+        if (entry < 0) {
+            // Batsman did not enter the crease (innings ended before their turn)
+            std::cout << "[" << tag << "-WAIT]  #" << (i + 1)
+                      << " " << batting_team[i]->getName()
+                      << "  crease_entry=DNB  first_ball_faced=DNB  waiting_time=DNB\n";
+        } else {
+            std::cout << "[" << tag << "-WAIT]  #" << (i + 1)
+                      << " " << batting_team[i]->getName()
+                      << "  crease_entry=" << entry << " balls"
+                      << "  first_ball_faced=" << (faced >= 0 ? std::to_string(faced) : "DNB")
+                      << "  waiting_time=" << entry << " balls\n";
+        }
+    }
+
+    // Middle order: positions 4-7 (1-indexed), i.e. indices 3-6 (0-indexed).
+    // Only include batsmen who actually batted (crease_entry >= 0).
+    const int mo_start = 3, mo_end = 6; // inclusive indices
+    std::vector<int> mo_waiting;
+    for (int i = mo_start; i <= mo_end && i < static_cast<int>(crease_entry_ball.size()); ++i) {
+        if (crease_entry_ball[i] >= 0) {
+            mo_waiting.push_back(crease_entry_ball[i]);
+        }
+    }
+
+    if (!mo_waiting.empty()) {
+        double avg = static_cast<double>(std::accumulate(mo_waiting.begin(), mo_waiting.end(), 0))
+                     / mo_waiting.size();
+        std::cout << "[" << tag << "-WAIT]  >> Middle-order (positions 4-7, "
+                  << mo_waiting.size() << " batted) average waiting time: "
+                  << std::fixed << std::setprecision(1) << avg << " balls\n";
+    } else {
+        std::cout << "[" << tag << "-WAIT]  >> Middle-order: none batted.\n";
+    }
+    std::cout << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// runInnings
+// ---------------------------------------------------------------------------
 std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
     target_overs = num_overs;
     total_runs = 0;
@@ -79,24 +171,44 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
     current_over = 0;
     current_ball = 0;
 
+    // --- Apply batting scheduler and configure SJF context flags ---
+    const std::string innings_label = batting_team_name + " innings";
+    applyBattingScheduler(innings_label);
+
+    // Compute reference_expected_balls = max expected_balls in batting team (for SJF scaling ratio)
+    int max_exp = 1;
+    for (const auto* p : batting_team) max_exp = std::max(max_exp, p->getExpectedBalls());
+    context.sjf_mode = (scheduler_type == SchedulerType::SJF);
+    context.reference_expected_balls = max_exp;
+
+    // --- Initialise waiting-time tracking ---
+    // Index 0 and 1 are the openers (arrive at ball 0).
+    // Indices 2..N are initialised to -1 (DNB until the previous wicket falls).
+    const size_t team_size = batting_team.size();
+    crease_entry_ball.assign(team_size, -1);
+    crease_entry_ball[0] = 0;
+    if (team_size > 1) crease_entry_ball[1] = 0;
+    first_faced_ball.assign(team_size, -1);
+    has_faced_ball.assign(team_size, false);
+    int balls_bowled = 0; // counts only legal (non-wide) deliveries
+
     context.match_active = true;
     context.ball_delivered = false;
     context.ball_in_air = false;
-    // call bowling and batting scheduler
-    // bowler is the bowling_team[0]
-    // Setup bowler and assign fielding quarters
-    striker = batting_team[0];
+
+    // Setup striker / non-striker
+    striker     = batting_team[0];
     non_striker = batting_team[1];
     pthread_mutex_lock(&context.roster_mutex);
     striker->setStriker(true);
     non_striker->setStriker(false);
-    std::cout << "The current striker is " << striker->getName() << std::endl;
-    std::cout << "The current non striker is " << non_striker->getName() << std::endl;
-    
+    std::cout << "[" << (scheduler_type == SchedulerType::FCFS ? "FCFS" : "SJF")
+              << "] Opener: " << striker->getName() << " (striker), "
+              << non_striker->getName() << " (non-striker)\n";
     pthread_cond_broadcast(&context.roster_cv);
     pthread_mutex_unlock(&context.roster_mutex);
     current_bowler = nullptr;
-    
+
     int quarter_assign = 0;
     for (size_t i = 0; i < bowling_team.size(); ++i) {
         if (bowling_team[i]->getRole() == PlayerRole::BOWLER && current_bowler == nullptr) {
@@ -108,9 +220,9 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
             quarter_assign++;
         }
     }
-    std::cout << "The current bowler is "<< current_bowler->getName() << std::endl;
-    
+    std::cout << "The current bowler is " << current_bowler->getName() << std::endl;
     std::cout << "quarters assigned" << std::endl;
+
     for (auto player : batting_team) {
         player->setContext(&context);
         player->setIsFieldingTeam(false);
@@ -122,6 +234,9 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
         player->startThread();
     }
     std::cout << "threads assigned" << std::endl;
+
+    const char* tag = (scheduler_type == SchedulerType::FCFS) ? "FCFS" : "SJF";
+
     while (current_over < target_overs && wickets < 10) {
         if (chase_target > 0 && total_runs >= chase_target) break;
         while (current_ball < 6 && wickets < 10) {
@@ -158,9 +273,25 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
             std::cout << "[UMPIRE] Play resolved. Calculating scores." << std::endl;
             
             total_runs += context.runs_scored_this_ball;
+
             if (!context.is_wide_this_ball) {
+                // Record first-ball-faced for the current striker
+                if (striker) {
+                    for (size_t k = 0; k < team_size; ++k) {
+                        if (batting_team[k] == striker && !has_faced_ball[k]) {
+                            first_faced_ball[k] = balls_bowled;
+                            has_faced_ball[k] = true;
+                            std::cout << "[" << tag << "-LOG] " << striker->getName()
+                                      << " faces first delivery at ball " << balls_bowled << "\n";
+                            break;
+                        }
+                    }
+                }
+                balls_bowled++;
+
                 pthread_mutex_lock(&context.roster_mutex);
                 if (context.is_wicket_this_ball) {
+                    const std::string dismissed_name = striker ? striker->getName() : "unknown";
                     wickets++;
                     if (striker) {
                         striker->setOut(true);
@@ -168,10 +299,19 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
                     }
                     if (static_cast<size_t>(wickets + 1) < batting_team.size()) {
                         Player* next_p = batting_team[wickets + 1];
+                        // Record when the new batsman enters the crease
+                        crease_entry_ball[wickets + 1] = balls_bowled;
                         striker = next_p;
                         if (striker) striker->setStriker(true);
+                        std::cout << "[" << tag << "-LOG] WICKET #" << wickets
+                                  << " - " << dismissed_name << " dismissed at ball " << balls_bowled
+                                  << ". Next: " << striker->getName()
+                                  << " (position #" << (wickets + 2) << " in order)\n";
                     } else {
                         striker = nullptr;
+                        std::cout << "[" << tag << "-LOG] WICKET #" << wickets
+                                  << " - " << dismissed_name << " dismissed at ball " << balls_bowled
+                                  << ". No more batsmen.\n";
                     }
                 } else if (context.runs_scored_this_ball % 2 != 0) {
                     if (striker && non_striker){
@@ -190,18 +330,18 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
             pthread_mutex_unlock(&context.field_mutex);
             
             if (!context.is_wide_this_ball) current_ball++;
-            std::cout << "[SCORE] Over " << current_over << "." << current_ball << " | Score: " << total_runs << "/" << wickets << std::endl;
+            std::cout << "[SCORE] Over " << current_over << "." << current_ball
+                      << " | Score: " << total_runs << "/" << wickets << std::endl;
 
             if (chase_target > 0 && total_runs >= chase_target) break;
         }
         
         current_over++;
         current_ball = 0;
-        
-        // --- Modification start: End of Over Bowler Rotation ---
+
         std::cout << "[UMPIRE] Over complete. Rotating strike and bowler." << std::endl;
         
-        // 1. Strike rotation
+        // 1. Strike rotation at end of over
         if (striker && non_striker){
             pthread_mutex_lock(&context.roster_mutex);
             striker->setStriker(false);
@@ -211,11 +351,7 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
             pthread_mutex_unlock(&context.roster_mutex);
         }
 
-        // 2. Bowler rotation
-        // To prevent threads from deadlocking in the rotation, the actual logic for 
-        // a thread switching from fielderThreadLoop to Bowler::threadLoop requires 
-        // the while-loops to be merged. For now, simply finding the next bowler avoids 
-        // the same bowler throwing 120 balls.
+        // 2. Bowler rotation (find next BOWLER-role player)
         int next_bowler_idx = -1;
         for (size_t i = 0; i < bowling_team.size(); ++i) {
             if (bowling_team[i] == current_bowler) {
@@ -223,9 +359,7 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
                 break;
             }
         }
-        
         if (next_bowler_idx != -1) {
-            // Find next valid bowler
             for (size_t i = 0; i < bowling_team.size(); ++i) {
                 int check_idx = (next_bowler_idx + i) % bowling_team.size();
                 if (bowling_team[check_idx]->getRole() == PlayerRole::BOWLER) {
@@ -236,9 +370,9 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
                 }
             }
         }
-        // --- Modification end ---
     }
-        // Termination sequence
+
+    // Termination sequence
     context.match_active = false;
     pthread_mutex_lock(&context.pitch_mutex);
     pthread_cond_broadcast(&context.pitch_cv);
@@ -256,30 +390,38 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
     for (auto player : batting_team) player->joinThread();
     for (auto player : bowling_team) player->joinThread();
 
+    // Print waiting-time analysis
+    printWaitingTimeAnalysis(innings_label);
+
     return {total_runs, wickets};
 }
 
-// --- Modification start: Main Umpire execution loop and thread management ---
-bool Match::run(int num_overs) {
+// ---------------------------------------------------------------------------
+// Main match driver – runs two innings for the given scheduler type
+// ---------------------------------------------------------------------------
+bool Match::run(int num_overs, SchedulerType sched) {
+    scheduler_type = sched;
+    const char* tag = (sched == SchedulerType::FCFS) ? "FCFS" : "SJF";
+
     const std::string first_innings_batting = batting_team_name;
     const std::string first_innings_bowling = bowling_team_name;
 
-    std::cout << "\n========== FIRST INNINGS ==========\n";
+    std::cout << "\n========== FIRST INNINGS [" << tag << "] ==========\n";
     auto first_innings = runInnings(num_overs);
-    const int first_runs = first_innings.first;
+    const int first_runs    = first_innings.first;
     const int first_wickets = first_innings.second;
-    const int target = first_runs + 1;
+    const int target        = first_runs + 1;
 
     std::cout << "[INNINGS END] " << first_innings_batting << " scored "
               << first_runs << "/" << first_wickets << std::endl;
     std::cout << "[TARGET] " << first_innings_bowling << " need " << target
               << " to win.\n";
 
-    // Swap innings.
+    // Swap innings
     std::swap(batting_team, bowling_team);
     std::swap(batting_team_name, bowling_team_name);
 
-    // Reset per-player transient state before spawning second-innings threads.
+    // Reset per-player transient state before spawning second-innings threads
     for (auto player : india_team) {
         player->setOut(false);
         player->setStriker(false);
@@ -291,9 +433,9 @@ bool Match::run(int num_overs) {
         player->setCurrentlyBowling(false);
     }
 
-    std::cout << "\n========== SECOND INNINGS ==========\n";
+    std::cout << "\n========== SECOND INNINGS [" << tag << "] ==========\n";
     auto second_innings = runInnings(num_overs, target);
-    const int second_runs = second_innings.first;
+    const int second_runs    = second_innings.first;
     const int second_wickets = second_innings.second;
 
     std::cout << "[INNINGS END] " << batting_team_name << " scored "
@@ -313,7 +455,6 @@ bool Match::run(int num_overs) {
 
     return true;
 }
-// --- Modification end ---
 
 const std::vector<Player*>& Match::getBattingTeam() const { return batting_team; }
 const std::vector<Player*>& Match::getBowlingTeam() const { return bowling_team; }

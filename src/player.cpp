@@ -135,8 +135,18 @@ BattingResult Player::calculateBatting(const BallData& incoming_ball, const Play
     BattingResult res;
     res.hit_quarter = dis_quarter(gen);
     
-    // Direct wicket probability (e.g., Bowled / LBW bypassing fielders)
+    // Base wicket probability (e.g., Bowled / LBW bypassing fielders)
     double miss_prob = 0.0005 / (batter_stats.batting > 0 ? batter_stats.batting : 1.0);
+
+    // SJF scaling: wicket probability is proportional to 1/expected_balls.
+    // A batsman with fewer expected balls is proportionally more likely to be out.
+    // E.g. with reference_expected_balls=25: a batsman with expected_balls=5 gets
+    // factor=5, so they are 5x as likely to be dismissed as one with expected_balls=25.
+    if (context && context->sjf_mode && expected_balls > 0) {
+        miss_prob *= static_cast<double>(context->reference_expected_balls) /
+                     static_cast<double>(expected_balls);
+    }
+
     res.is_wicket = (dis_prob(gen) < miss_prob); 
 
     // Calculate post-contact ball profile for the fielding phase.

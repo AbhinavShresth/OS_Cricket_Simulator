@@ -49,6 +49,10 @@ struct MatchContext {
     
     // Global simulation state
     bool match_active = true;
+
+    // Scheduler mode: when true wicket probability scales with 1/expected_balls (SJF)
+    bool sjf_mode = false;
+    int reference_expected_balls = 25; // baseline for SJF wicket-prob scaling
 };
 
 #endif // MATCH_CONTEXT_HPP
