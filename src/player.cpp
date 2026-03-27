@@ -15,6 +15,7 @@ double clamp01(double x) {
 /// Maps hit-ball speed (from bowler pace × power_hitting) and striker skills to 1/2/4/6.
 int sampleRunsFromHit(const BallData& hit_ball, const StrikerBattingSnapshot& s, std::mt19937& gen) {
     std::uniform_real_distribution<double> uni(0.0, 1.0);
+
     const double hit_strength = clamp01((hit_ball.speed - 35.0) / 170.0);
     const double movement = clamp01((std::abs(hit_ball.swing) + std::abs(hit_ball.spin)) / 10.0);
     const double bat = clamp01(s.batting);
@@ -23,23 +24,53 @@ int sampleRunsFromHit(const BallData& hit_ball, const StrikerBattingSnapshot& s,
     const double sr_norm = clamp01((s.strike_rate - 110.0) / 75.0);
     const double expected_norm = clamp01((static_cast<double>(s.expected_balls) - 8.0) / 30.0);
 
-    const double clean_contact = 1.0 - 0.55 * movement;  // More movement means less clean striking.
-    const double scramble_factor = 1.0 + 0.45 * movement; // More movement means fewer boundaries, more running.
-    const double anchor_factor = 1.0 + 0.35 * expected_norm; // Anchor profile: favors strike rotation.
-    const double attack_factor = 1.0 - 0.28 * expected_norm; // Lower expected balls => more boundary intent.
+    // Realistic cricket modifiers
+    const double clean_contact = 1.0 - 0.55 * movement;
+    const double scramble_factor = 1.0 + 0.45 * movement;
+    const double anchor_factor = 1.0 + 0.35 * expected_norm;
+    const double attack_factor = 1.0 - 0.28 * expected_norm;
 
-    double w6 = (0.015 + 0.50 * hit_strength * hit_strength * powh * (0.4 + 0.6 * sr_norm) * clean_contact) * attack_factor;
-    double w4 = (0.045 + 0.55 * hit_strength * (0.45 * powh + 0.55 * bat) * (0.65 + 0.35 * sr_norm) * clean_contact) * attack_factor;
-    double w2 = (0.10 + 0.40 * sel * std::sqrt(std::max(0.0, 1.0 - 0.6 * hit_strength)) + 0.12 * bat) * scramble_factor * anchor_factor;
-    double w1 = (0.28 + 0.22 * bat * sel + 0.12 * (1.0 - hit_strength)) * scramble_factor * anchor_factor;
+    // Boundary probabilities
+    double w6 = (0.015 + 0.50 * hit_strength * hit_strength * powh *
+                (0.4 + 0.6 * sr_norm) * clean_contact) * attack_factor;
 
-    const double sum = w1 + w2 + w4 + w6;
+    double w4 = (0.045 + 0.55 * hit_strength *
+                (0.45 * powh + 0.55 * bat) *
+                (0.65 + 0.35 * sr_norm) * clean_contact) * attack_factor;
+
+    // 🔥 NEW: 3 runs (gap + running)
+    double w3 = (0.05
+                + 0.25 * sel * bat * (1.0 - hit_strength)
+                + 0.15 * movement) * scramble_factor * anchor_factor;
+
+    // Running-based outcomes
+    double w2 = (0.10
+                + 0.35 * sel * std::sqrt(std::max(0.0, 1.0 - 0.6 * hit_strength))
+                + 0.10 * bat) * scramble_factor * anchor_factor;
+
+    double w1 = (0.25
+                + 0.20 * bat * sel
+                + 0.15 * (1.0 - hit_strength)) * scramble_factor * anchor_factor;
+
+    // Optional realism: strong hits rarely give 3
+    if (hit_strength > 0.85) {
+        w3 *= 0.2;
+    }
+
+    // Normalize sampling
+    const double sum = w1 + w2 + w3 + w4 + w6;
     double r = uni(gen) * sum;
     if (r < w6) return 6;
     r -= w6;
+
     if (r < w4) return 4;
     r -= w4;
+
+    if (r < w3) return 3;
+    r -= w3;
+
     if (r < w2) return 2;
+
     return 1;
 }
 
