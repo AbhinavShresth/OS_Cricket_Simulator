@@ -150,7 +150,7 @@ void Match::printWaitingTimeAnalysis(const std::string& innings_label) const {
     }
 
     if (!mo_waiting.empty()) {
-        double avg = static_cast<double>(std::accumulate(mo_waiting.begin(), mo_waiting.end(), 0))
+        double avg = std::accumulate(mo_waiting.begin(), mo_waiting.end(), 0.0)
                      / mo_waiting.size();
         std::cout << "[" << tag << "-WAIT]  >> Middle-order (positions 4-7, "
                   << mo_waiting.size() << " batted) average waiting time: "
@@ -299,7 +299,8 @@ std::pair<int, int> Match::runInnings(int num_overs, int chase_target) {
                     }
                     if (static_cast<size_t>(wickets + 1) < batting_team.size()) {
                         Player* next_p = batting_team[wickets + 1];
-                        // Record when the new batsman enters the crease
+                        // Record the ball number at dismissal as the crease-entry ball for the
+                        // incoming batsman (they enter immediately after the wicket is taken).
                         crease_entry_ball[wickets + 1] = balls_bowled;
                         striker = next_p;
                         if (striker) striker->setStriker(true);

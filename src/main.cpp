@@ -32,7 +32,7 @@ static bool runMatch(SchedulerType sched, const char* label, int num_overs) {
 
 int main() {
     try {
-        const int NUM_OVERS = 20000; // large number so wickets end the innings
+        const int NUM_OVERS = 20000; // No over limit: innings ends when all 10 wickets fall.
 
         // --- Match 1: FCFS ---
         if (!runMatch(SchedulerType::FCFS, "Match 1 - FCFS Scheduler", NUM_OVERS)) return 1;
